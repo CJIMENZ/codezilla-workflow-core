@@ -95,6 +95,10 @@ export interface WorkflowStore {
   saveSpecification(
     specification: SpecificationVersion,
   ): Promise<SpecificationVersion>;
+  saveSpecificationAndTransition(
+    specification: SpecificationVersion,
+    transition: TransitionInput,
+  ): Promise<{ specification: SpecificationVersion; workflow: Workflow }>;
   getSpecification(id: string): Promise<SpecificationVersion | undefined>;
   recordApproval(approval: Approval): Promise<Approval>;
   listApprovals(workflowId: string): Promise<readonly Approval[]>;
@@ -190,6 +194,7 @@ export interface CoordinationPort {
   projectWorkflow(input: {
     externalId: string;
     workflow: Workflow;
+    specificationSha256?: string;
     reviewUrl?: string;
     message?: string;
   }): Promise<void>;

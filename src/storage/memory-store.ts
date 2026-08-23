@@ -41,16 +41,19 @@ export class MemoryWorkflowStore implements WorkflowStore {
     string,
     "active" | "paused" | "draining"
   >();
+  private readonly projectEnabled = new Map<string, boolean>();
 
   async healthcheck(): Promise<{ ok: boolean; detail: string }> {
     return { ok: true, detail: "in-memory test store" };
   }
 
   async registerProject(
-    _config: ProjectConfig,
+    config: ProjectConfig,
     _fingerprint: string,
     _updatedAt: string,
-  ): Promise<void> {}
+  ): Promise<void> {
+    this.projectEnabled.set(config.project.id, config.project.enabled);
+  }
 
   async getProjectControl(
     projectId: string,
@@ -185,6 +188,8 @@ export class MemoryWorkflowStore implements WorkflowStore {
       .filter(
         (workflow) =>
           workflow.state === "ready_for_execution" &&
+          (this.projectEnabled.get(workflow.projectId) ?? true) &&
+          (this.controls.get(workflow.projectId) ?? "active") === "active" &&
           (!input.projectIds ||
             input.projectIds.includes(workflow.projectId)) &&
           (!workflow.leaseExpiresAt ||
@@ -274,6 +279,38 @@ export class MemoryWorkflowStore implements WorkflowStore {
     if (existing) return copy(existing);
     this.specifications.set(specification.id, copy(specification));
     return copy(specification);
+  }
+
+  async saveSpecificationAndTransition(
+    specification: SpecificationVersion,
+    transition: TransitionInput,
+  ): Promise<{ specification: SpecificationVersion; workflow: Workflow }> {
+    const existing = [...this.specifications.values()].find(
+      (candidate) =>
+        candidate.workItemId === specification.workItemId &&
+        candidate.contentSha256 === specification.contentSha256,
+    );
+    const stored = existing ?? specification;
+    const inserted = !existing;
+    if (inserted) this.specifications.set(stored.id, copy(stored));
+    try {
+      const workflow = await this.transition({
+        ...transition,
+        patch: {
+          ...transition.patch,
+          specificationVersionId: stored.id,
+        },
+        payload: {
+          ...(transition.payload ?? {}),
+          specificationVersionId: stored.id,
+          contentSha256: stored.contentSha256,
+        },
+      });
+      return { specification: copy(stored), workflow };
+    } catch (error) {
+      if (inserted) this.specifications.delete(stored.id);
+      throw error;
+    }
   }
 
   async getSpecification(

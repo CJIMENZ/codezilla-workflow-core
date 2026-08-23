@@ -57,6 +57,10 @@ export const ProjectConfigSchema = z.object({
       .object({
         workspaceId: z.string().min(1),
         listId: z.string().min(1),
+        intakeStatuses: z
+          .array(z.string().min(1))
+          .min(1)
+          .default(["Ready for Planning"]),
         managedCustomFieldIds: z.record(z.string(), z.string()),
         statusByWorkflowState: z.record(z.string(), z.string()).default({}),
       })

@@ -130,6 +130,7 @@ export const ApprovalSchema = z.object({
     "spec_hash",
     "commit_sha",
     "evidence_manifest_hash",
+    "review_bundle_hash",
     "command_hash",
   ]),
   subjectValue: IdentifierSchema,

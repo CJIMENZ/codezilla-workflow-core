@@ -101,7 +101,7 @@ describe("WorkflowService", () => {
     expect(ready.state).toBe("ready_for_execution");
     expect(
       (await store.pullOutbox(20, fixedClock.now().toISOString())).length,
-    ).toBeGreaterThan(0);
+    ).toBe(0);
   });
 
   it("allows only one runner to claim a ready workflow", async () => {
@@ -166,6 +166,27 @@ describe("WorkflowService", () => {
       actorId: "github:CJIMENZ",
       idempotencyKey: "claim-authorize",
     });
+
+    await store.setProjectControl(
+      projectConfig().project.id,
+      "paused",
+      "test",
+      fixedClock.now().toISOString(),
+    );
+    expect(
+      await store.claimNext({
+        runnerId: "runner:paused",
+        leaseSeconds: 60,
+        occurredAt: fixedClock.now().toISOString(),
+        idempotencyKey: "claim-paused",
+      }),
+    ).toBeUndefined();
+    await store.setProjectControl(
+      projectConfig().project.id,
+      "active",
+      "test",
+      fixedClock.now().toISOString(),
+    );
 
     const [left, right] = await Promise.all([
       store.claimNext({

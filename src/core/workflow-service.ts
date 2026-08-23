@@ -18,7 +18,7 @@ import {
   type WorkflowState,
 } from "../domain/model";
 import { assertRiskWithinCeiling, assertHumanApproval } from "./policy";
-import { sha256 } from "./hashing";
+import { hashObject, sha256 } from "./hashing";
 import type { Clock, WorkflowStore } from "./ports";
 
 export class WorkflowService {
@@ -117,7 +117,11 @@ export class WorkflowService {
       idempotencyKey: input.idempotencyKey,
       payload: { reason: input.reason },
       occurredAt: now,
-      outbox: [this.projectionMessage(current, input.expectedVersion + 1, now)],
+      outbox: await this.projectionMessages(
+        current,
+        input.expectedVersion + 1,
+        now,
+      ),
       ...(input.patch ? { patch: input.patch } : {}),
     };
     return this.store.transition(transitionInput);
@@ -174,36 +178,39 @@ export class WorkflowService {
       createdBy: input.actorId,
       createdAt: now,
     });
-    await this.store.saveSpecification(specification);
-
-    const updated = await this.store.transition({
-      workflowId: workflow.id,
-      expectedVersion: workflow.stateVersion,
-      to: "awaiting_spec_approval",
-      actorId: input.actorId,
-      eventType: "specification_frozen",
-      idempotencyKey: input.idempotencyKey,
-      payload: {
-        specificationVersionId: specification.id,
-        contentSha256: specification.contentSha256,
+    const frozen = await this.store.saveSpecificationAndTransition(
+      specification,
+      {
+        workflowId: workflow.id,
+        expectedVersion: workflow.stateVersion,
+        to: "awaiting_spec_approval",
+        actorId: input.actorId,
+        eventType: "specification_frozen",
+        idempotencyKey: input.idempotencyKey,
+        payload: {
+          specificationVersionId: specification.id,
+          contentSha256: specification.contentSha256,
+        },
+        patch: {
+          specificationVersionId: specification.id,
+          branchName: specification.branchName,
+          baseSha: specification.baseCommitSha,
+          headSha: input.headSha,
+          pullRequestNumber: input.pullRequestNumber,
+          pullRequestUrl: input.pullRequestUrl,
+        },
+        occurredAt: now,
+        outbox: await this.projectionMessages(
+          workflow,
+          workflow.stateVersion + 1,
+          now,
+        ),
       },
-      patch: {
-        specificationVersionId: specification.id,
-        branchName: specification.branchName,
-        baseSha: specification.baseCommitSha,
-        headSha: input.headSha,
-        pullRequestNumber: input.pullRequestNumber,
-        pullRequestUrl: input.pullRequestUrl,
-      },
-      occurredAt: now,
-      outbox: [
-        this.projectionMessage(workflow, workflow.stateVersion + 1, now),
-      ],
-    });
+    );
 
     return {
-      workflow: updated,
-      specificationSha256: specification.contentSha256,
+      workflow: frozen.workflow,
+      specificationSha256: frozen.specification.contentSha256,
     };
   }
 
@@ -262,9 +269,11 @@ export class WorkflowService {
       idempotencyKey: input.idempotencyKey,
       payload: { specificationSha256: specification.contentSha256 },
       occurredAt: now,
-      outbox: [
-        this.projectionMessage(workflow, workflow.stateVersion + 1, now),
-      ],
+      outbox: await this.projectionMessages(
+        workflow,
+        workflow.stateVersion + 1,
+        now,
+      ),
     });
   }
 
@@ -288,7 +297,7 @@ export class WorkflowService {
     assertHumanApproval({
       approvals,
       type: "implementation",
-      subjectValue: workflow.headSha,
+      subjectValue: this.reviewBundleHash(workflow),
       policyVersion: workflow.policyVersion,
       allowedActorIds:
         this.config.project.approvals.implementation.allowedActorIds,
@@ -309,14 +318,29 @@ export class WorkflowService {
         evidenceManifestSha256: workflow.evidenceManifestSha256,
       },
       occurredAt: now,
-      outbox: [
-        this.projectionMessage(workflow, workflow.stateVersion + 1, now),
-      ],
+      outbox: await this.projectionMessages(
+        workflow,
+        workflow.stateVersion + 1,
+        now,
+      ),
     });
   }
 
   get policyVersion(): string {
-    return `project-config:${this.config.schemaVersion}`;
+    return `project-config:${hashObject(this.config)}`;
+  }
+
+  reviewBundleHash(workflow: Workflow): string {
+    if (!workflow.headSha || !workflow.evidenceManifestSha256) {
+      throw new PolicyError(
+        "A review bundle requires an exact head and evidence manifest",
+      );
+    }
+    return hashObject({
+      headSha: workflow.headSha,
+      evidenceManifestSha256: workflow.evidenceManifestSha256,
+      policyVersion: workflow.policyVersion,
+    });
   }
 
   private async requireWorkflow(id: string): Promise<Workflow> {
@@ -326,17 +350,23 @@ export class WorkflowService {
     return workflow;
   }
 
-  private projectionMessage(
+  private async projectionMessages(
     workflow: Workflow,
     nextVersion: number,
     availableAt: string,
   ) {
-    return {
-      destination: "clickup" as const,
-      messageType: "workflow_projection",
-      idempotencyKey: `projection:clickup:${workflow.id}:${nextVersion}`,
-      payload: { workflowId: workflow.id },
-      availableAt,
-    };
+    const workItem = await this.store.getWorkItem(workflow.workItemId);
+    if (!workItem)
+      throw new ValidationError("Workflow references a missing work item");
+    if (workItem.externalSource !== "clickup") return [];
+    return [
+      {
+        destination: "clickup" as const,
+        messageType: "workflow_projection",
+        idempotencyKey: `projection:clickup:${workflow.id}:${nextVersion}`,
+        payload: { workflowId: workflow.id },
+        availableAt,
+      },
+    ];
   }
 }
