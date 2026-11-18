@@ -1,0 +1,14 @@
+{
+  "name": "codezilla-workflow-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify": "npm run typecheck && npm test"
+  },
+  "dependencies": { "yaml": "2.9.0", "zod": "4.4.3" },
+  "devDependencies": { "@types/node": "24.13.3", "typescript": "5.9.3", "vitest": "3.2.7" }
+}
